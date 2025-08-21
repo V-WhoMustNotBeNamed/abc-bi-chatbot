@@ -96,12 +96,14 @@ def create_chart_and_save(df, question):
                 df.columns[1]: y_values
             })
             
-            # Create seaborn bar plot
+            # Create seaborn bar plot - fix deprecation warning
             bars = sns.barplot(
                 data=chart_df, 
                 x=df.columns[0], 
                 y=df.columns[1],
+                hue=df.columns[0],
                 palette="viridis",
+                legend=False,
                 ax=ax
             )
             
@@ -152,19 +154,44 @@ def export_to_excel(df, question, sql_query=None, chart_base64=None):
     buffer = io.BytesIO()
     
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        # Write the data (unformatted for Excel calculations)
+        from openpyxl.styles import Font
+        
+        # Write the raw data for calculations
         df_raw = df.copy()
         # Remove formatting for raw data
         for col in df_raw.columns:
             if df_raw[col].dtype == 'object':
                 try:
-                    # Try to convert formatted strings back to numbers
-                    df_raw[col] = df_raw[col].str.replace('$', '').str.replace(',', '')
-                    df_raw[col] = pd.to_numeric(df_raw[col], errors='ignore')
+                    numeric_series = pd.to_numeric(df_raw[col].str.replace('$', '').str.replace(',', ''), errors='coerce')
+                    df_raw[col] = numeric_series.fillna(df_raw[col])
                 except:
                     pass
         
-        df_raw.to_excel(writer, sheet_name='Data', index=False)
+        # Use simple sheet name
+        sheet_name = "Data"
+        df_raw.to_excel(writer, sheet_name=sheet_name, index=False, startrow=2)
+        
+        # Get the workbook and worksheet
+        workbook = writer.book
+        worksheet = writer.sheets[sheet_name]
+        
+        # Add question as title in A1
+        worksheet['A1'] = f"Query: {question}"
+        worksheet['A1'].font = Font(bold=True, size=14)
+        
+        # Format the data with proper number formatting
+        for col_idx, col in enumerate(df_raw.columns, 1):
+            col_letter = chr(64 + col_idx)
+            
+            if any(keyword in col.lower() for keyword in ['revenue', 'amount', 'price', 'cost', 'profit', 'value', 'spent']):
+                for row in range(3, len(df_raw) + 3):
+                    cell = worksheet[f'{col_letter}{row}']
+                    cell.number_format = '$#,##0.00'
+            else:
+                if df_raw[col].dtype in ['int64', 'float64']:
+                    for row in range(3, len(df_raw) + 3):
+                        cell = worksheet[f'{col_letter}{row}']
+                        cell.number_format = '#,##0'
         
         # Add metadata sheet
         metadata_rows = [
@@ -180,10 +207,26 @@ def export_to_excel(df, question, sql_query=None, chart_base64=None):
         metadata_df = pd.DataFrame(metadata_rows, columns=['Field', 'Value'])
         metadata_df.to_excel(writer, sheet_name='Metadata', index=False)
         
-        # Add SQL query as separate sheet if provided
+        metadata_sheet = writer.sheets['Metadata']
+        metadata_sheet.column_dimensions['B'].width = 100
+        
         if sql_query:
             sql_df = pd.DataFrame({'SQL_Query': [sql_query]})
             sql_df.to_excel(writer, sheet_name='SQL_Query', index=False)
+            sql_sheet = writer.sheets['SQL_Query']
+            sql_sheet.column_dimensions['A'].width = 100
+            
+        if chart_base64:
+            try:
+                from openpyxl.drawing.image import Image as OpenpyxlImage
+                chart_data = base64.b64decode(chart_base64)
+                chart_buffer = io.BytesIO(chart_data)
+                img = OpenpyxlImage(chart_buffer)
+                img.width = 600
+                img.height = 400
+                worksheet.add_image(img, f'A{len(df_raw) + 5}')
+            except Exception as e:
+                print(f"Could not embed chart in Excel: {e}")
     
     buffer.seek(0)
     return buffer
@@ -193,46 +236,66 @@ def export_all_results_to_excel(chat_history):
     buffer = io.BytesIO()
     
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        # Summary sheet
+        from openpyxl.styles import Font
+        
         summary_data = []
         sheet_counter = 1
         
         for i, chat in enumerate(chat_history):
             if chat['result']['success'] and chat['result']['data']:
+                sheet_name = f"Query_{sheet_counter}"
+                
                 summary_data.append({
-                    'Query_Number': i + 1,
-                    'Question': chat['question'][:100] + ('...' if len(chat['question']) > 100 else ''),
-                    'Sheet_Name': f'Query_{sheet_counter}',
+                    'Query_Number': sheet_counter,
+                    'Question': chat['question'],
+                    'Sheet_Name': sheet_name,
                     'Rows_Returned': len(chat['result']['data']),
                     'Timestamp': chat['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
-                    'SQL_Query': chat['result'].get('sql', 'N/A')[:100] + ('...' if len(chat['result'].get('sql', '')) > 100 else '')
+                    'SQL_Query': chat['result'].get('sql', 'N/A')
                 })
                 
-                # Create individual sheet for each successful query
                 if isinstance(chat['result']['data'][0], (list, tuple)):
                     df_result = pd.DataFrame(
                         chat['result']['data'], 
                         columns=chat['result'].get('columns', [f'Col_{j}' for j in range(len(chat['result']['data'][0]))])
                     )
                     
-                    # Remove formatting for raw data export
                     df_raw = df_result.copy()
                     for col in df_raw.columns:
                         if df_raw[col].dtype == 'object':
                             try:
-                                df_raw[col] = df_raw[col].str.replace('$', '').str.replace(',', '')
-                                df_raw[col] = pd.to_numeric(df_raw[col], errors='ignore')
+                                numeric_series = pd.to_numeric(df_raw[col].str.replace('$', '').str.replace(',', ''), errors='coerce')
+                                df_raw[col] = numeric_series.fillna(df_raw[col])
                             except:
                                 pass
                     
-                    sheet_name = f'Query_{sheet_counter}'
-                    df_raw.to_excel(writer, sheet_name=sheet_name, index=False)
+                    df_raw.to_excel(writer, sheet_name=sheet_name, index=False, startrow=2)
+                    
+                    worksheet = writer.sheets[sheet_name]
+                    worksheet['A1'] = f"Query {sheet_counter}: {chat['question']}"
+                    worksheet['A1'].font = Font(bold=True, size=14)
+                    
+                    for col_idx, col in enumerate(df_raw.columns, 1):
+                        col_letter = chr(64 + col_idx)
+                        
+                        if any(keyword in col.lower() for keyword in ['revenue', 'amount', 'price', 'cost', 'profit', 'value', 'spent']):
+                            for row in range(3, len(df_raw) + 3):
+                                cell = worksheet[f'{col_letter}{row}']
+                                cell.number_format = '$#,##0.00'
+                        elif df_raw[col].dtype in ['int64', 'float64']:
+                            for row in range(3, len(df_raw) + 3):
+                                cell = worksheet[f'{col_letter}{row}']
+                                cell.number_format = '#,##0'
+                    
                     sheet_counter += 1
         
-        # Write summary
         if summary_data:
             summary_df = pd.DataFrame(summary_data)
             summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            
+            summary_sheet = writer.sheets['Summary']
+            summary_sheet.column_dimensions['F'].width = 80
+            summary_sheet.column_dimensions['B'].width = 50
     
     buffer.seek(0)
     return buffer
@@ -391,106 +454,89 @@ def main():
             *Just type your question in natural language below!*
             """)
         
-        # Chat input with Enter key support
-        user_question = st.text_input(
-            "Ask a question about your data:",
-            placeholder="e.g., What are our top selling products this year?",
-            key="user_input",
-            on_change=None  # We'll handle Enter key via form
-        )
-        
-        # Use form to enable Enter key submission
+        # Chat input with Enter key support via form
         with st.form(key="question_form", clear_on_submit=True):
-            # Hidden submit button for form (Enter key support)
-            submitted = st.form_submit_button("Ask Question", type="primary")
+            user_question = st.text_input(
+                "Ask a question about your data:",
+                placeholder="e.g., What are our top selling products this year?",
+                key="user_input_form"
+            )
             
-        # Also add the regular analyze button outside form for clicking
-        if not submitted:
-            submitted = st.button("🔍 Analyze", type="secondary")
+            # Single submit button for form (Enter key support)
+            submitted = st.form_submit_button("🔍 Analyze", type="primary")
         
-        # Process question when either form submitted or button clicked
+        # Process question when form submitted
         if submitted and user_question:
             # Check if this exact question was just processed (prevent duplicates)
             if (not st.session_state.chat_history or 
                 st.session_state.chat_history[-1]['question'] != user_question):
-                    
-                    try:
-                        with st.spinner("Analyzing your data..."):
-                            # Get answer from analytics engine
-                            result = st.session_state.analytics_engine.answer_question(user_question)
+                
+                try:
+                    with st.spinner("Analyzing your data..."):
+                        # Get answer from analytics engine
+                        result = st.session_state.analytics_engine.answer_question(user_question)
+                        
+                        # Display result
+                        st.markdown("### Analysis Result")
+                        
+                        if result['success']:
+                            # Show SQL query used
+                            with st.expander("SQL Query Used"):
+                                st.code(result['sql'], language='sql')
                             
-                            # Display result
-                            st.markdown("### 📊 Analysis Result")
-                            
-                            if result['success']:
-                                # Show SQL query used
-                                with st.expander("🔍 SQL Query Used"):
-                                    st.code(result['sql'], language='sql')
-                                
-                                # Show results
-                                if result['data']:
-                                    # Convert to DataFrame for better display
-                                    if isinstance(result['data'][0], (list, tuple)):
-                                        df_result = pd.DataFrame(
-                                            result['data'], 
-                                            columns=result.get('columns', [f'Col_{i}' for i in range(len(result['data'][0]))])
+                            # Show results
+                            if result['data']:
+                                # Convert to DataFrame for better display
+                                if isinstance(result['data'][0], (list, tuple)):
+                                    df_result = pd.DataFrame(
+                                        result['data'], 
+                                        columns=result.get('columns', [f'Col_{i}' for i in range(len(result['data'][0]))])
+                                    )
+                                    
+                                    # Post-process date formatting
+                                    df_result = format_dates_in_dataframe(df_result)
+                                    df_result = sort_month_data(df_result)
+                                    
+                                    # Create formatted version for display
+                                    df_display = format_numbers_in_dataframe(df_result)
+                                    
+                                    st.dataframe(df_display, use_container_width=True)
+                                    
+                                    # Create and show chart
+                                    chart_base64 = None
+                                    if len(df_result.columns) >= 2:
+                                        try:
+                                            if 'revenue' in df_result.columns[1].lower() or 'amount' in df_result.columns[1].lower() or 'quantity' in df_result.columns[1].lower():
+                                                chart_base64 = create_chart_and_save(df_display, user_question)
+                                                if chart_base64:
+                                                    st.markdown("### Visualization")
+                                                    st.image(f"data:image/png;base64,{chart_base64}")
+                                        except Exception as e:
+                                            st.warning(f"Could not create chart: {e}")
+                                    
+                                    # Add to chat history with full result data including chart
+                                    chat_entry = {
+                                        'question': user_question,
+                                        'result': result,
+                                        'timestamp': pd.Timestamp.now(),
+                                        'chart_base64': chart_base64,
+                                        'formatted_df': df_display
+                                    }
+                                    st.session_state.chat_history.append(chat_entry)
+                                    
+                                    # Add export button for this result
+                                    if st.button("Export to Excel", key=f"export_{len(st.session_state.chat_history)}"):
+                                        excel_buffer = export_to_excel(df_result, user_question, result['sql'], chart_base64)
+                                        st.download_button(
+                                            label="Download Excel File",
+                                            data=excel_buffer,
+                                            file_name=f"query_result_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                                         )
-                                        
-                                        # Post-process date formatting
-                                        df_result = format_dates_in_dataframe(df_result)
-                                        df_result = sort_month_data(df_result)
-                                        
-                                        # Create formatted version for display
-                                        df_display = format_numbers_in_dataframe(df_result)
-                                        
-                                        st.dataframe(df_display, use_container_width=True)
-                                        
-                                        # Create and show chart
-                                        chart_base64 = None
-                                        if len(df_result.columns) >= 2:
-                                            try:
-                                                if 'revenue' in df_result.columns[1].lower() or 'amount' in df_result.columns[1].lower():
-                                                    chart_base64 = create_chart_and_save(df_display, user_question)
-                                                    if chart_base64:
-                                                        st.markdown("### 📈 Visualization")
-                                                        st.image(f"data:image/png;base64,{chart_base64}")
-                                            except Exception as e:
-                                                st.warning(f"Could not create chart: {e}")
-                                        
-                                        # Add to chat history with full result data including chart
-                                        chat_entry = {
-                                            'question': user_question,
-                                            'result': result,
-                                            'timestamp': pd.Timestamp.now(),
-                                            'chart_base64': chart_base64,
-                                            'formatted_df': df_display
-                                        }
-                                        st.session_state.chat_history.append(chat_entry)
-                                        
-                                        # Add export button for this result
-                                        if st.button("📥 Export to Excel", key=f"export_{len(st.session_state.chat_history)}"):
-                                            excel_buffer = export_to_excel(df_result, user_question, result['sql'], chart_base64)
-                                            st.download_button(
-                                                label="💾 Download Excel File",
-                                                data=excel_buffer,
-                                                file_name=f"query_result_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                                            )
-                                        
-                                    else:
-                                        st.write(result['data'])
-                                        # Add to chat history for non-tabular results too
-                                        chat_entry = {
-                                            'question': user_question,
-                                            'result': result,
-                                            'timestamp': pd.Timestamp.now(),
-                                            'chart_base64': None,
-                                            'formatted_df': None
-                                        }
-                                        st.session_state.chat_history.append(chat_entry)
+                                    
                                 else:
-                                    st.info("Query executed successfully but returned no data.")
-                                    # Add to chat history for no-data results
+                                    st.write(result['data'])
+                                    # Add to chat history for non-tabular results too
                                     chat_entry = {
                                         'question': user_question,
                                         'result': result,
@@ -500,51 +546,62 @@ def main():
                                     }
                                     st.session_state.chat_history.append(chat_entry)
                             else:
-                                # Log error and show user-friendly message
-                                error_entry = {
-                                    'timestamp': pd.Timestamp.now(),
+                                st.info("Query executed successfully but returned no data.")
+                                # Add to chat history for no-data results
+                                chat_entry = {
                                     'question': user_question,
-                                    'error': result['error'],
-                                    'sql_attempted': result.get('sql', 'No SQL generated')
+                                    'result': result,
+                                    'timestamp': pd.Timestamp.now(),
+                                    'chart_base64': None,
+                                    'formatted_df': None
                                 }
-                                st.session_state.error_log.append(error_entry)
-                                
-                                # User-friendly error message
-                                st.error("🤔 I couldn't process that question properly.")
-                                st.markdown("""
-                                **Try rephrasing your question differently:**
-                                - Be more specific about what you want to analyze
-                                - Use simpler language 
-                                - Check column names in the data preview above
-                                
-                                **Examples of clear questions:**
-                                - "Show me total revenue by month"
-                                - "Which customers spent the most money?"
-                                - "What are our top selling products?"
-                                """)
-                                
-                                # Show technical details in expander
-                                with st.expander("🔧 Technical Details (for developers)"):
-                                    st.code(f"Error: {result['error']}", language="text")
-                                    if result.get('sql'):
-                                        st.code(result['sql'], language='sql')
-                                
-                    except Exception as e:
-                        # Log unexpected errors
-                        error_entry = {
-                            'timestamp': pd.Timestamp.now(),
-                            'question': user_question,
-                            'error': str(e),
-                            'sql_attempted': 'System error'
-                        }
-                        st.session_state.error_log.append(error_entry)
-                        
-                        st.error("😵 Something went wrong! Please try rephrasing your question.")
-                        
-                        with st.expander("🔧 Technical Details (for developers)"):
-                            st.code(f"System Error: {str(e)}", language="text")
-            else:
-                st.warning("Please enter a question first.")
+                                st.session_state.chat_history.append(chat_entry)
+                        else:
+                            # Log error and show user-friendly message
+                            error_entry = {
+                                'timestamp': pd.Timestamp.now(),
+                                'question': user_question,
+                                'error': result['error'],
+                                'sql_attempted': result.get('sql', 'No SQL generated')
+                            }
+                            st.session_state.error_log.append(error_entry)
+                            
+                            # User-friendly error message
+                            st.error("I couldn't process that question properly.")
+                            st.markdown("""
+                            **Try rephrasing your question differently:**
+                            - Be more specific about what you want to analyze
+                            - Use simpler language 
+                            - Check column names in the data preview above
+                            
+                            **Examples of clear questions:**
+                            - "Show me total revenue by month"
+                            - "Which customers spent the most money?"
+                            - "What are our top selling products?"
+                            """)
+                            
+                            # Show technical details in expander
+                            with st.expander("Technical Details (for developers)"):
+                                st.code(f"Error: {result['error']}", language="text")
+                                if result.get('sql'):
+                                    st.code(result['sql'], language='sql')
+                            
+                except Exception as e:
+                    # Log unexpected errors
+                    error_entry = {
+                        'timestamp': pd.Timestamp.now(),
+                        'question': user_question,
+                        'error': str(e),
+                        'sql_attempted': 'System error'
+                    }
+                    st.session_state.error_log.append(error_entry)
+                    
+                    st.error("Something went wrong! Please try rephrasing your question.")
+                    
+                    with st.expander("Technical Details (for developers)"):
+                        st.code(f"System Error: {str(e)}", language="text")
+        elif submitted and not user_question:
+            st.warning("Please enter a question first.")
         
         # Chat history
         if st.session_state.chat_history:
@@ -642,7 +699,7 @@ def main():
         - **Get instant insights** with SQL-powered analytics
         - **See visualizations** of your key metrics
         
-        AI BI Analyst for business owners running their business on Google Sheets! 📊
+        Perfect for SMBs running their business on Google Sheets! 📊
         """)
 
 if __name__ == "__main__":
