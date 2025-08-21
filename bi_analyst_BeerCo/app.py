@@ -192,7 +192,23 @@ def export_to_excel(df, question, sql_query=None, chart_base64=None):
                     for row in range(3, len(df_raw) + 3):
                         cell = worksheet[f'{col_letter}{row}']
                         cell.number_format = '#,##0'
-        
+
+        # Auto-fit all column widths
+        for col_idx, col in enumerate(df_raw.columns, 1):
+            col_letter = chr(64 + col_idx)
+            column = worksheet.column_dimensions[col_letter]
+            
+            # Calculate max width needed
+            max_length = 0
+            for row in range(1, len(df_raw) + 3):  # Include header and title
+                cell_value = str(worksheet[f'{col_letter}{row}'].value or '')
+                max_length = max(max_length, len(cell_value))
+            
+            # Set width with some padding, max 50 chars
+            column.width = min(max_length + 2, 50)
+
+        # Also auto-fit the question title width
+        worksheet.column_dimensions['A'].width = max(len(f"Query: {question}") + 2, worksheet.column_dimensions['A'].width)
         # Add metadata sheet
         metadata_rows = [
             ['Question', question],
@@ -286,6 +302,25 @@ def export_all_results_to_excel(chat_history):
                             for row in range(3, len(df_raw) + 3):
                                 cell = worksheet[f'{col_letter}{row}']
                                 cell.number_format = '#,##0'
+
+                    # Auto-fit all column widths
+                    for col_idx, col in enumerate(df_raw.columns, 1):
+                        col_letter = chr(64 + col_idx)
+                        column = worksheet.column_dimensions[col_letter]
+                        
+                        # Calculate max width needed
+                    
+                        max_length = 0
+                        for row in range(1, len(df_raw) + 3):  # Include header and title
+                            cell_value = str(worksheet[f'{col_letter}{row}'].value or '')
+                            max_length = max(max_length, len(cell_value))
+                        
+                    
+                        # Set width with some padding, max 50 chars
+                        column.width = min(max_length + 2, 50)
+
+                    # Also auto-fit the question title width
+                    worksheet.column_dimensions['A'].width = max(len(f"Query {sheet_counter}: {chat['question']}") + 2, worksheet.column_dimensions['A'].width)
                     
                     sheet_counter += 1
         
@@ -478,6 +513,8 @@ def main():
                         
                         # Display result
                         st.markdown("### Analysis Result")
+                        st.markdown(f"**Question:** {user_question}")
+                        st.markdown("---")
                         
                         if result['success']:
                             # Show SQL query used
