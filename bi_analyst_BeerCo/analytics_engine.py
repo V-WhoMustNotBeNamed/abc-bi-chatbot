@@ -11,15 +11,17 @@ class AnalyticsEngine:
         self.conn = None
         self.tables = {}
         self.table_schemas = {}
+        self.column_mappings = {}  # Store original to cleaned column mappings
         self.ai_generator = AIQueryGenerator(openai_api_key) if openai_api_key else None
         
-    def load_data(self, dataframes: Dict[str, pd.DataFrame]) -> bool:
-        """Load DataFrames into DuckDB tables"""
+    def load_data(self, dataframes: Dict[str, pd.DataFrame], cleaning_metadata: Optional[Dict[str, Dict]] = None) -> bool:
+        """Load DataFrames into DuckDB tables with schema information"""
         try:
             # Create new in-memory DuckDB connection
             self.conn = duckdb.connect(':memory:')
             self.tables = {}
             self.table_schemas = {}
+            self.column_mappings = {}
             
             for name, df in dataframes.items():
                 if df is not None and not df.empty:
@@ -31,11 +33,25 @@ class AnalyticsEngine:
                     
                     # Store table info
                     self.tables[table_name] = name  # mapping from clean name to original
+                    
+                    # Get column mapping from cleaning metadata if available
+                    if cleaning_metadata and name in cleaning_metadata:
+                        metadata = cleaning_metadata[name]
+                        column_mapping = metadata.get('column_mapping', {})
+                        type_conversions = metadata.get('type_conversions', {})
+                    else:
+                        column_mapping = {col: col for col in df.columns}
+                        type_conversions = {}
+                    
                     self.table_schemas[table_name] = {
                         'columns': list(df.columns),
                         'dtypes': df.dtypes.to_dict(),
-                        'sample_data': df.head(3).to_dict('records')
+                        'sample_data': df.head(3).to_dict('records'),
+                        'column_mapping': column_mapping,
+                        'type_conversions': type_conversions
                     }
+                    
+                    self.column_mappings[table_name] = column_mapping
                     
             return len(self.tables) > 0
             
@@ -58,12 +74,27 @@ class AnalyticsEngine:
         
         for table_name, original_name in self.tables.items():
             schema = self.table_schemas[table_name]
-            schema_info += f"Table: {table_name} (original: {original_name})\n"
-            schema_info += "Columns:\n"
+            schema_info += f"Table: {table_name} (original sheet: {original_name})\n"
+            schema_info += "Columns with original names:\n"
+            
+            # Get column mapping
+            column_mapping = schema.get('column_mapping', {})
+            reverse_mapping = {v: k for k, v in column_mapping.items()}
             
             for col in schema['columns']:
                 dtype = schema['dtypes'][col]
-                schema_info += f"  - {col} ({dtype})\n"
+                original_col = reverse_mapping.get(col, col)
+                if original_col != col:
+                    schema_info += f"  - {col} (originally: '{original_col}', type: {dtype})\n"
+                else:
+                    schema_info += f"  - {col} (type: {dtype})\n"
+            
+            # Show type conversions if any
+            type_conversions = schema.get('type_conversions', {})
+            if type_conversions:
+                schema_info += "Type conversions applied:\n"
+                for col, conversion in type_conversions.items():
+                    schema_info += f"  - {col}: {conversion}\n"
             
             schema_info += "Sample data:\n"
             for i, row in enumerate(schema['sample_data']):

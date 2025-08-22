@@ -1,6 +1,7 @@
 import gspread
 import pandas as pd
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple, Any
+from data_cleaner import DataCleaner
 
 class SheetsConnector:
     """Handles connection and data extraction from Google Sheets"""
@@ -10,6 +11,8 @@ class SheetsConnector:
         self.gc = None
         self.workbook = None
         self.dataframes = {}
+        self.cleaning_metadata = {}
+        self.data_cleaner = DataCleaner()
         
     def connect(self, sheet_url: str) -> bool:
         """Connect to Google Sheets and load all worksheets"""
@@ -22,6 +25,8 @@ class SheetsConnector:
             
             # Load all worksheets into DataFrames
             self.dataframes = {}
+            self.cleaning_metadata = {}
+            
             for worksheet in self.workbook.worksheets():
                 try:
                     # Get all records from the worksheet
@@ -29,10 +34,11 @@ class SheetsConnector:
                     if records:  # Only process if there's data
                         df = pd.DataFrame(records)
                         
-                        # Basic data cleaning
-                        df = self._clean_dataframe(df)
+                        # Apply comprehensive data cleaning
+                        df_clean, metadata = self.data_cleaner.clean_dataframe(df, worksheet.title)
                         
-                        self.dataframes[worksheet.title] = df
+                        self.dataframes[worksheet.title] = df_clean
+                        self.cleaning_metadata[worksheet.title] = metadata
                 except Exception as e:
                     print(f"Warning: Could not load worksheet '{worksheet.title}': {e}")
                     continue
@@ -43,43 +49,38 @@ class SheetsConnector:
             print(f"Error connecting to sheets: {e}")
             return False
     
-    def _clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Basic data cleaning for the DataFrame"""
-        # Remove completely empty rows
-        df = df.dropna(how='all')
-        
-        # Clean column names (remove extra spaces)
-        df.columns = df.columns.str.strip()
-        
-        # Convert numeric columns that might be stored as strings
-        for col in df.columns:
-            if df[col].dtype == 'object':
-                # Try to convert to numeric if it looks numeric
-                numeric_series = pd.to_numeric(df[col], errors='coerce')
-                if not numeric_series.isna().all():
-                    # If we can convert most values, keep the numeric version
-                    if numeric_series.notna().sum() / len(df) > 0.5:
-                        df[col] = numeric_series
-        
-        return df
     
     def get_sheet_info(self) -> Dict:
-        """Get basic information about the connected sheet"""
+        """Get basic information about the connected sheet including schema details"""
         if not self.workbook:
             return {}
+            
+        worksheet_info = {}
+        for name, df in self.dataframes.items():
+            metadata = self.cleaning_metadata.get(name, {})
+            worksheet_info[name] = {
+                'rows': len(df),
+                'columns': list(df.columns),
+                'original_columns': metadata.get('original_columns', []),
+                'column_mapping': metadata.get('column_mapping', {}),
+                'data_types': {col: str(dtype) for col, dtype in df.dtypes.to_dict().items()},
+                'type_conversions': metadata.get('type_conversions', {})
+            }
             
         return {
             'title': self.workbook.title,
             'worksheets': list(self.dataframes.keys()),
             'total_rows': sum(len(df) for df in self.dataframes.values()),
-            'worksheet_info': {
-                name: {
-                    'rows': len(df),
-                    'columns': list(df.columns)
-                }
-                for name, df in self.dataframes.items()
-            }
+            'worksheet_info': worksheet_info,
+            'cleaning_summary': self.get_cleaning_summary()
         }
+    
+    def get_cleaning_summary(self) -> Dict[str, Any]:
+        """Get a summary of all data cleaning operations"""
+        if not self.cleaning_metadata:
+            return {}
+        
+        return self.data_cleaner.generate_schema_summary(list(self.cleaning_metadata.values()))
     
     def get_dataframes(self) -> Dict[str, pd.DataFrame]:
         """Return all loaded DataFrames"""
@@ -93,13 +94,19 @@ class SheetsConnector:
         try:
             # Reload all worksheets
             self.dataframes = {}
+            self.cleaning_metadata = {}
+            
             for worksheet in self.workbook.worksheets():
                 try:
                     records = worksheet.get_all_records()
                     if records:
                         df = pd.DataFrame(records)
-                        df = self._clean_dataframe(df)
-                        self.dataframes[worksheet.title] = df
+                        
+                        # Apply comprehensive data cleaning
+                        df_clean, metadata = self.data_cleaner.clean_dataframe(df, worksheet.title)
+                        
+                        self.dataframes[worksheet.title] = df_clean
+                        self.cleaning_metadata[worksheet.title] = metadata
                 except Exception as e:
                     print(f"Warning: Could not refresh worksheet '{worksheet.title}': {e}")
                     continue

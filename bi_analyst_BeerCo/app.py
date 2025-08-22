@@ -396,7 +396,8 @@ def main():
             # Reinitialize analytics engine with new key if already connected
             if st.session_state.sheets_connector is not None:
                 analytics = AnalyticsEngine(openai_api_key if openai_api_key else None)
-                analytics.load_data(st.session_state.sheets_connector.get_dataframes())
+                analytics.load_data(st.session_state.sheets_connector.get_dataframes(), 
+                                  st.session_state.sheets_connector.cleaning_metadata)
                 st.session_state.analytics_engine = analytics
         
         # Show API key status
@@ -426,7 +427,7 @@ def main():
                             
                             # Initialize analytics engine with persisted OpenAI key
                             analytics = AnalyticsEngine(st.session_state.openai_api_key if st.session_state.openai_api_key else None)
-                            analytics.load_data(connector.get_dataframes())
+                            analytics.load_data(connector.get_dataframes(), connector.cleaning_metadata)
                             st.session_state.analytics_engine = analytics
                             
                             # Show AI status
@@ -460,11 +461,51 @@ def main():
                     st.info("🔧 Pattern-Based Queries Active")
                     st.caption("Add OpenAI API key above for smarter queries")
             
+            # Show schema information
+            if 'cleaning_summary' in sheet_info:
+                with st.expander("📋 Data Schema & Cleaning Info"):
+                    cleaning_summary = sheet_info['cleaning_summary']
+                    st.write(f"**Total rows processed:** {cleaning_summary.get('total_rows', 0)}")
+                    st.write("**Tables and Column Mappings:**")
+                    
+                    for table_name, table_info in cleaning_summary.get('tables', {}).items():
+                        st.write(f"\n**{table_name}** ({table_info['row_count']} rows)")
+                        
+                        # Show column mappings if any changes were made
+                        col_mapping = table_info['column_mapping']
+                        has_changes = any(orig != clean for orig, clean in col_mapping.items())
+                        
+                        if has_changes:
+                            st.write("Column name changes:")
+                            mapping_df = pd.DataFrame([
+                                {'Original Name': orig, 'Cleaned Name': clean}
+                                for orig, clean in col_mapping.items()
+                                if orig != clean
+                            ])
+                            st.dataframe(mapping_df, use_container_width=True)
+                        
+                        # Show type conversions if any
+                        type_conversions = table_info.get('type_conversions', {})
+                        if type_conversions:
+                            st.write("Data type conversions:")
+                            for col, conversion in type_conversions.items():
+                                st.write(f"  - `{col}`: {conversion}")
+            
             # Show data preview
             for worksheet_name in sheet_info['worksheets']:
                 with st.expander(f"Preview: {worksheet_name}"):
                     df = st.session_state.sheets_connector.dataframes[worksheet_name]
                     st.write(f"Shape: {df.shape}")
+                    
+                    # Show column info
+                    col_info = pd.DataFrame({
+                        'Column': df.columns,
+                        'Type': [str(dtype) for dtype in df.dtypes]
+                    })
+                    st.write("**Column Information:**")
+                    st.dataframe(col_info, use_container_width=True)
+                    
+                    st.write("**Data Preview:**")
                     st.dataframe(df.head(), use_container_width=True)
     
     # Main chat interface

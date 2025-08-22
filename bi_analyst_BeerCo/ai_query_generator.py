@@ -64,25 +64,34 @@ DATABASE SCHEMA:
 
 IMPORTANT GUIDELINES:
 1. Use only the tables and columns that exist in the schema above
-2. For date operations, cast string dates to DATE type: CAST(sale_date AS DATE)
-3. For month/year formatting, use this format: strftime('%B %Y', CAST(sale_date AS DATE)) to get "March 2023" format
-4. For date ranges, always add ORDER BY date ASC for chronological order
-5. Use proper JOINs when combining tables
-6. ALWAYS use table aliases and fully qualify column names in JOINs (e.g., s.product_id = p.product_id)
-7. Include appropriate GROUP BY, ORDER BY, and LIMIT clauses
-8. For revenue/sales analysis, use SUM(total_amount)
-9. For customer analysis, join sales with customers table
-10. For product analysis, join sales with products table
-11. For profit/margin calculations, use (price - cost) or (revenue - cost)
-12. Use meaningful table aliases: s for sales, c for customers, p for products
-13. Return only the SQL query, no explanations
+2. CRITICAL: Column names have been standardized to snake_case. When you see "originally: 'Original Name'" in the schema, the user might refer to the original name, but you MUST use the standardized column name in your SQL query.
+3. For example, if the schema shows: sales_contact (originally: 'Sales Contact'), use 'sales_contact' in the SQL even if the user mentions "Sales Contact"
+4. Data types have been cleaned and standardized - the schema shows the actual data types after conversion
+5. Numeric columns (amounts, quantities, prices) are already converted to float/numeric types - no casting needed
+6. Date columns are already in datetime format - you can use them directly in date operations
+7. For month/year formatting, use this format: strftime('%B %Y', sale_date) to get "March 2023" format
+8. For date ranges, always add ORDER BY date ASC for chronological order
+9. Use proper JOINs when combining tables
+10. ALWAYS use table aliases and fully qualify column names in JOINs (e.g., s.product_id = p.product_id)
+11. Include appropriate GROUP BY, ORDER BY, and LIMIT clauses
+12. For revenue/sales analysis, use SUM(total_amount) or similar amount columns
+13. For customer analysis, join sales with customers table
+14. For product analysis, join sales with products table
+15. For profit/margin calculations, use (price - cost) or (revenue - cost)
+16. Use meaningful table aliases: s for sales, c for customers, p for products
+17. Return only the SQL query, no explanations unless there's an error
+
+COLUMN NAME MAPPING EXAMPLES:
+- If user asks about "Sales Contact", use column: sales_contact
+- If user asks about "Total Amount", use column: total_amount
+- If user asks about "Product Name", use column: product_name
 
 EXAMPLE OF PROPER DATE FORMATTING AND ORDERING:
-SELECT strftime('%B %Y', CAST(sale_date AS DATE)) as month_year, SUM(total_amount) as revenue
+SELECT strftime('%B %Y', sale_date) as month_year, SUM(total_amount) as revenue
 FROM salestransactions
-WHERE CAST(sale_date AS DATE) BETWEEN '2023-03-01' AND '2023-08-31'
-GROUP BY strftime('%Y-%m', CAST(sale_date AS DATE)), strftime('%B %Y', CAST(sale_date AS DATE))
-ORDER BY strftime('%Y-%m', CAST(sale_date AS DATE)) ASC
+WHERE sale_date BETWEEN '2023-03-01' AND '2023-08-31'
+GROUP BY strftime('%Y-%m', sale_date), strftime('%B %Y', sale_date)
+ORDER BY strftime('%Y-%m', sale_date) ASC
 
 USER QUESTION: {question}
 
