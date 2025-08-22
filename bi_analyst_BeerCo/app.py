@@ -8,6 +8,21 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import seaborn as sns
 import base64
+import os, tempfile
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Open AI API Key
+openai_api_key = os.getenv("openaitestkey")
+
+creds_json = os.environ["CREDENTIALS_JSON"]
+
+# Create a temp file that behaves like "credentials.json"
+with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+    f.write(creds_json)
+    temp_creds_path = f.name
 
 # Set seaborn style
 sns.set_style("whitegrid")
@@ -381,14 +396,14 @@ def main():
         st.header("Configuration")
         
         # OpenAI API Key input with session state persistence
-        openai_api_key = st.text_input(
-            "OpenAI API Key:",
-            value=st.session_state.openai_api_key,
-            type="password",
-            placeholder="sk-...",
-            help="Enter your OpenAI API key for smart SQL generation",
-            key="api_key_input"
-        )
+        # openai_api_key = st.text_input(
+        #     "OpenAI API Key:",
+        #     value=st.session_state.openai_api_key,
+        #     type="password",
+        #     placeholder="sk-...",
+        #     help="Enter your OpenAI API key for smart SQL generation",
+        #     key="api_key_input"
+        # )
         
         # Update session state when key changes
         if openai_api_key != st.session_state.openai_api_key:
@@ -419,7 +434,7 @@ def main():
                 try:
                     with st.spinner("Connecting to Google Sheets..."):
                         # Initialize sheets connector
-                        connector = SheetsConnector('credentials.json')
+                        connector = SheetsConnector(temp_creds_path)
                         success = connector.connect(sheet_url)
                         
                         if success:
