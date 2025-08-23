@@ -85,6 +85,49 @@ def sort_month_data(df):
             pass
     return df
 
+def should_create_chart(df, question, sql_query=None):
+    """Determine if a chart should be created based on data and question"""
+    if len(df.columns) < 2:
+        return False
+    
+    question_lower = question.lower()
+    
+    # Explicit chart request keywords
+    chart_keywords = ['plot', 'chart', 'graph', 'visualize', 'show me', 'trend', 'compare', 'distribution']
+    if any(keyword in question_lower for keyword in chart_keywords):
+        return True
+    
+    # Time-series detection
+    time_keywords = ['month', 'year', 'date', 'time', 'trend', 'over time', 'by month', 'by year', 'monthly', 'yearly', 'daily', 'weekly']
+    if any(keyword in question_lower for keyword in time_keywords):
+        return True
+    
+    # Check if first column is date-like
+    first_col = df.columns[0].lower()
+    if any(keyword in first_col for keyword in ['month', 'date', 'year', 'time', 'period']):
+        return True
+    
+    # Check SQL for time-based grouping
+    if sql_query:
+        sql_lower = sql_query.lower()
+        if 'group by' in sql_lower and any(func in sql_lower for func in ['strftime', 'date_trunc', 'extract']):
+            return True
+    
+    # Aggregation queries (top N, comparisons)
+    agg_keywords = ['top', 'best', 'worst', 'highest', 'lowest', 'most', 'least', 'ranking', 'by category', 'by type', 'by product', 'by customer']
+    if any(keyword in question_lower for keyword in agg_keywords) and len(df) <= 20:
+        return True
+    
+    # Numeric analysis keywords
+    analysis_keywords = ['revenue', 'sales', 'profit', 'cost', 'amount', 'quantity', 'count', 'total', 'sum', 'average']
+    second_col = df.columns[1].lower() if len(df.columns) > 1 else ''
+    if any(keyword in second_col for keyword in analysis_keywords):
+        # Check if it's a meaningful aggregation (not too many rows)
+        if len(df) <= 20:
+            return True
+    
+    return False
+
 def create_chart_and_save(df, question):
     """Create a chart using seaborn and return it as base64 encoded image"""
     if len(df.columns) >= 2:
@@ -111,16 +154,51 @@ def create_chart_and_save(df, question):
                 df.columns[1]: y_values
             })
             
-            # Create seaborn bar plot - fix deprecation warning
-            bars = sns.barplot(
-                data=chart_df, 
-                x=df.columns[0], 
-                y=df.columns[1],
-                hue=df.columns[0],
-                palette="viridis",
-                legend=False,
-                ax=ax
+            # Determine chart type based on data and question
+            question_lower = question.lower()
+            first_col_lower = df.columns[0].lower()
+            
+            # Use line chart for time series data
+            is_time_series = (
+                any(keyword in first_col_lower for keyword in ['month', 'date', 'year', 'time', 'period']) or
+                any(keyword in question_lower for keyword in ['trend', 'over time', 'monthly', 'yearly', 'daily', 'weekly'])
             )
+            
+            if is_time_series and len(chart_df) > 1:
+                # Create line plot for time series
+                ax.plot(range(len(chart_df)), y_values, marker='o', linewidth=2.5, markersize=8, color='#2E86AB')
+                ax.fill_between(range(len(chart_df)), y_values, alpha=0.3, color='#2E86AB')
+                ax.set_xticks(range(len(chart_df)))
+                ax.set_xticklabels(chart_df.iloc[:, 0])
+                
+                # Add value labels on points
+                for i, (x, y) in enumerate(zip(range(len(chart_df)), y_values)):
+                    if any(keyword in df.columns[1].lower() for keyword in ['revenue', 'amount', 'price', 'cost', 'profit']):
+                        label = f'${y:,.0f}'
+                    else:
+                        label = f'{y:,.0f}'
+                    ax.annotate(label, (x, y), textcoords="offset points", xytext=(0,10), ha='center', fontsize=9)
+            else:
+                # Create bar plot for comparisons
+                bars = sns.barplot(
+                    data=chart_df, 
+                    x=df.columns[0], 
+                    y=df.columns[1],
+                    hue=df.columns[0],
+                    palette="viridis",
+                    legend=False,
+                    ax=ax
+                )
+                
+                # Add value labels on bars
+                for i, bar in enumerate(bars.patches):
+                    height = bar.get_height()
+                    if any(keyword in df.columns[1].lower() for keyword in ['revenue', 'amount', 'price', 'cost', 'profit']):
+                        label = f'${height:,.0f}'
+                    else:
+                        label = f'{height:,.0f}'
+                    ax.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
+                           label, ha='center', va='bottom', fontsize=10)
             
             # Customize the chart
             ax.set_title(f"Analysis: {question[:50]}{'...' if len(question) > 50 else ''}", 
@@ -138,15 +216,8 @@ def create_chart_and_save(df, question):
             if len(chart_df) > 5:
                 plt.xticks(rotation=45, ha='right')
             
-            # Add value labels on bars
-            for i, bar in enumerate(bars.patches):
-                height = bar.get_height()
-                if any(keyword in df.columns[1].lower() for keyword in ['revenue', 'amount', 'price', 'cost', 'profit']):
-                    label = f'${height:,.0f}'
-                else:
-                    label = f'{height:,.0f}'
-                ax.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
-                       label, ha='center', va='bottom', fontsize=10)
+            # Add grid for better readability
+            ax.grid(True, alpha=0.3, linestyle='--')
             
             plt.tight_layout()
             
@@ -542,6 +613,12 @@ def main():
             - Show me customers who spent more than $1000
             - Which products have the highest profit margin?
             
+            **📊 Chart Generation Tips:**
+            - Use keywords like "plot", "chart", "visualize" to ensure charts are created
+            - Time-series queries automatically generate charts (monthly/yearly trends)
+            - Top N queries (top 5, best 10) will create bar charts
+            - Example: "Plot monthly revenue for 2023" or "Chart the top 10 customers by revenue"
+            
             *Just type your question in natural language below!*
             """)
         
@@ -595,15 +672,14 @@ def main():
                                     
                                     st.dataframe(df_display, use_container_width=True)
                                     
-                                    # Create and show chart
+                                    # Create and show chart based on intelligent detection
                                     chart_base64 = None
-                                    if len(df_result.columns) >= 2:
+                                    if should_create_chart(df_result, user_question, result.get('sql')):
                                         try:
-                                            if 'revenue' in df_result.columns[1].lower() or 'amount' in df_result.columns[1].lower() or 'quantity' in df_result.columns[1].lower():
-                                                chart_base64 = create_chart_and_save(df_display, user_question)
-                                                if chart_base64:
-                                                    st.markdown("### Visualization")
-                                                    st.image(f"data:image/png;base64,{chart_base64}")
+                                            chart_base64 = create_chart_and_save(df_display, user_question)
+                                            if chart_base64:
+                                                st.markdown("### Visualization")
+                                                st.image(f"data:image/png;base64,{chart_base64}")
                                         except Exception as e:
                                             st.warning(f"Could not create chart: {e}")
                                     
