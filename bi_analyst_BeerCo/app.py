@@ -667,16 +667,13 @@ def main():
             st.markdown("**Click any question below to use it:**")
             
             faq_questions = [
-                "What are our top 5 selling products?",
+                "What are our top 5 selling cultivars",
                 "Who are our best customers by revenue?",
                 "What's our monthly revenue trend?",
-                "Which beer types perform best?",
-                "What's our profit margin?",
-                "Which products need restocking?",
-                "What was our revenue in March 2023?",
-                "Show me customers who spent more than $1000",
-                "Which products have the highest profit margin?",
-                "Plot monthly revenue for 2023",
+                "What was the revenue generated in Q3 2024 month over month by salesperson?",
+                "Show me customers who spent more than $25,000",
+                "What are the top 5 price per clones by cultivar",
+                "Plot monthly revenue for 2025",
                 "Chart the top 10 customers by revenue"
             ]
             
@@ -695,12 +692,11 @@ def main():
             """)
         
         # Chat input with Enter key support via form
-        with st.form(key="question_form", clear_on_submit=True):
+        with st.form(key="question_form", clear_on_submit=False):
             # Check if FAQ was selected
             default_value = ""
             if st.session_state.selected_faq:
                 default_value = st.session_state.selected_faq
-                st.session_state.selected_faq = None  # Reset after using
             
             user_question = st.text_input(
                 "Ask a question about your data:",
@@ -714,6 +710,9 @@ def main():
         
         # Process question when form submitted
         if submitted and user_question:
+            # Reset selected_faq after processing
+            st.session_state.selected_faq = None
+            
             # Check if this exact question was just processed (prevent duplicates)
             if (not st.session_state.chat_history or 
                 st.session_state.chat_history[-1]['question'] != user_question):

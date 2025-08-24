@@ -157,26 +157,40 @@ COLUMN NAME MAPPING EXAMPLES:
 - If user asks about "Total Amount", use column: total_amount
 - If user asks about "Product Name", use column: product_name
 
-CRITICAL GROUP BY RULE:
-21. **GROUP BY expressions MUST match SELECT expressions exactly**:
-    - If SELECT has strftime('%B %Y', date), GROUP BY must also have strftime('%B %Y', date)
-    - NEVER mix different date formats between SELECT and GROUP BY
-    - Alternative: Use MIN/MAX wrapper in SELECT if GROUP BY uses different format
+MANDATORY SQL RULES - VIOLATIONS WILL CAUSE ERRORS:
 
-CORRECT DATE FORMATTING EXAMPLES:
-Example 1 - Matching expressions:
-SELECT strftime('%B %Y', sale_date) as month_year, SUM(total_amount) as revenue
-FROM salestransactions
-WHERE sale_date BETWEEN '2023-03-01' AND '2023-08-31'
-GROUP BY strftime('%B %Y', sale_date)
-ORDER BY MIN(sale_date) ASC
+21. **GROUP BY Rule (CRITICAL)**:
+    - Every non-aggregate column in SELECT must appear EXACTLY as written in GROUP BY
+    - If SELECT has strftime('%B %Y', date), GROUP BY MUST have strftime('%B %Y', date)
+    - NEVER use different strftime formats between SELECT and GROUP BY
 
-Example 2 - Using MIN wrapper:
-SELECT MIN(strftime('%B %Y', sale_date)) as month_year, SUM(total_amount) as revenue
-FROM salestransactions
-WHERE sale_date BETWEEN '2023-03-01' AND '2023-08-31'
-GROUP BY strftime('%Y-%m', sale_date)
-ORDER BY strftime('%Y-%m', sale_date) ASC
+22. **ORDER BY Rule (CRITICAL)**:
+    - ORDER BY can ONLY use:
+      a) Expressions that appear in GROUP BY
+      b) Aggregate functions like MIN(), MAX(), AVG(), SUM(), COUNT()
+    - NEVER use raw column names in ORDER BY if they're not in GROUP BY
+    - For date ordering with grouping: Use MIN(date_column) or MAX(date_column)
+
+23. **Common Mistakes to AVOID**:
+    - DON'T: SELECT strftime('%B %Y', date) ... GROUP BY strftime('%Y-%m', date)
+    - DON'T: GROUP BY something ... ORDER BY raw_column
+    - DON'T: Mix different date formats between clauses
+
+CORRECT MONTH-OVER-MONTH QUERY PATTERN:
+SELECT strftime('%B %Y', commitment_date) AS month_year, 
+       SUM(total_price) AS revenue
+FROM sheet1
+WHERE commitment_date BETWEEN '2025-01-01' AND '2025-06-30'
+GROUP BY strftime('%B %Y', commitment_date)  -- EXACT match with SELECT
+ORDER BY MIN(commitment_date) ASC  -- Use MIN() for chronological ordering
+
+ANOTHER CORRECT EXAMPLE:
+SELECT strftime('%Y-%m', sale_date) as year_month,
+       sales_contact,
+       SUM(total_amount) as total
+FROM sales
+GROUP BY strftime('%Y-%m', sale_date), sales_contact  -- All non-aggregate columns
+ORDER BY strftime('%Y-%m', sale_date), sales_contact  -- Can use GROUP BY expressions
 
 USER QUESTION: {question}
 
@@ -193,11 +207,48 @@ SQL QUERY:"""
         # Remove extra whitespace
         sql = sql.strip()
         
+        # Fix common GROUP BY issues
+        sql = self._fix_group_by_issues(sql)
+        
         # Ensure query ends with semicolon (optional)
         if not sql.endswith(';'):
             sql += ';'
         
         return sql
+    
+    def _fix_group_by_issues(self, sql: str) -> str:
+        """Fix common GROUP BY and ORDER BY issues in SQL"""
+        try:
+            sql_lower = sql.lower()
+            
+            # Check if query has GROUP BY
+            if 'group by' not in sql_lower:
+                return sql
+            
+            # Fix ORDER BY with raw date columns when using GROUP BY
+            # Pattern: ORDER BY <date_column> (without MIN/MAX)
+            if 'order by' in sql_lower:
+                # Check for common date column names in ORDER BY without aggregates
+                date_columns = ['date', 'commitment_date', 'sale_date', 'order_date', 'created_date']
+                for col in date_columns:
+                    # Pattern: ORDER BY column_name (ASC|DESC)?
+                    pattern = rf'order\s+by\s+{col}(?:\s+(?:asc|desc))?'
+                    if re.search(pattern, sql_lower):
+                        # Check if this column is wrapped in a function
+                        order_section = sql[sql_lower.index('order by'):]
+                        if not any(func in order_section.lower()[:50] for func in ['min(', 'max(', 'strftime']):
+                            # Replace with MIN(column) for chronological ordering
+                            sql = re.sub(
+                                rf'(order\s+by\s+)({col})(\s+(?:asc|desc)?)',
+                                rf'\1MIN({col})\3',
+                                sql,
+                                flags=re.IGNORECASE
+                            )
+            
+            return sql
+        except Exception:
+            # If fixing fails, return original SQL
+            return sql
     
     def validate_sql_safety(self, sql: str) -> bool:
         """Basic validation to ensure SQL is safe (read-only)"""
