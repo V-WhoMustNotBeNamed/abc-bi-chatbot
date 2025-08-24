@@ -10,6 +10,9 @@ import seaborn as sns
 import base64
 import os, tempfile
 from dotenv import load_dotenv
+import time
+import json
+import sqlparse
 
 # Load environment variables from .env file
 load_dotenv()
@@ -27,6 +30,49 @@ with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
 # Set seaborn style
 sns.set_style("whitegrid")
 plt.style.use('seaborn-v0_8')
+
+def extract_source_columns(sql_query):
+    """Extract source column names from SQL query (not aliases)"""
+    try:
+        # Parse the SQL query
+        parsed = sqlparse.parse(sql_query)[0]
+        
+        # Extract column names using regex patterns
+        columns = set()
+        
+        # Pattern to match column names (word characters, underscores)
+        column_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b'
+        
+        # Remove SQL keywords, functions, and aliases
+        sql_keywords = {
+            'select', 'from', 'where', 'group', 'by', 'order', 'having', 'limit',
+            'join', 'inner', 'left', 'right', 'outer', 'on', 'and', 'or', 'not',
+            'in', 'between', 'like', 'as', 'asc', 'desc', 'distinct', 'all',
+            'sum', 'count', 'avg', 'max', 'min', 'strftime', 'date', 'cast',
+            'case', 'when', 'then', 'else', 'end', 'is', 'null', 'table'
+        }
+        
+        # Extract all potential column names
+        potential_columns = re.findall(column_pattern, sql_query.lower())
+        
+        # Filter out SQL keywords and numeric values
+        for col in potential_columns:
+            if col not in sql_keywords and not col.isdigit():
+                # Skip alias names (words that come after 'as')
+                sql_lower = sql_query.lower()
+                if f'as {col}' not in sql_lower:
+                    # Also check if it's not a table name (appears after FROM or JOIN)
+                    if not (f'from {col}' in sql_lower or f'join {col}' in sql_lower):
+                        columns.add(col)
+        
+        # Special handling for date columns in strftime
+        strftime_matches = re.findall(r"strftime\([^,]+,\s*([a-zA-Z_][a-zA-Z0-9_]*)\)", sql_query, re.IGNORECASE)
+        columns.update(strftime_matches)
+        
+        return sorted(list(columns))
+    except Exception as e:
+        # If parsing fails, return empty list
+        return []
 
 def format_numbers_in_dataframe(df):
     """Format numbers with proper currency and comma formatting"""
@@ -470,6 +516,10 @@ if 'error_log' not in st.session_state:
     st.session_state.error_log = []
 if 'openai_api_key' not in st.session_state:
     st.session_state.openai_api_key = ""
+if 'query_log' not in st.session_state:
+    st.session_state.query_log = []
+if 'selected_faq' not in st.session_state:
+    st.session_state.selected_faq = None
 
 def main():
     st.title("🍺 AI BI Analyst for Google Sheets")
@@ -612,33 +662,49 @@ def main():
         st.markdown("---")
         st.subheader("💬 Ask Your BI Questions")
         
-        # Sample questions
-        with st.expander("💡 Sample Questions"):
-            st.markdown("""
-            **Try asking questions like:**
-            - What are our top 5 selling products?
-            - Who are our best customers by revenue?
-            - What's our monthly revenue trend?
-            - Which beer types perform best?
-            - What's our profit margin?
-            - Which products need restocking?
-            - What was our revenue in March 2023?
-            - Show me customers who spent more than $1000
-            - Which products have the highest profit margin?
+        # FAQ with clickable questions
+        with st.expander("💡 FAQ - Frequently Asked Questions"):
+            st.markdown("**Click any question below to use it:**")
             
+            faq_questions = [
+                "What are our top 5 selling products?",
+                "Who are our best customers by revenue?",
+                "What's our monthly revenue trend?",
+                "Which beer types perform best?",
+                "What's our profit margin?",
+                "Which products need restocking?",
+                "What was our revenue in March 2023?",
+                "Show me customers who spent more than $1000",
+                "Which products have the highest profit margin?",
+                "Plot monthly revenue for 2023",
+                "Chart the top 10 customers by revenue"
+            ]
+            
+            # Create clickable buttons for each FAQ
+            for i, question in enumerate(faq_questions):
+                if st.button(f"📌 {question}", key=f"faq_{i}"):
+                    st.session_state.selected_faq = question
+                    st.rerun()
+            
+            st.markdown("---")
+            st.markdown("""
             **📊 Chart Generation Tips:**
             - Use keywords like "plot", "chart", "visualize" to ensure charts are created
             - Time-series queries automatically generate charts (monthly/yearly trends)
             - Top N queries (top 5, best 10) will create bar charts
-            - Example: "Plot monthly revenue for 2023" or "Chart the top 10 customers by revenue"
-            
-            *Just type your question in natural language below!*
             """)
         
         # Chat input with Enter key support via form
         with st.form(key="question_form", clear_on_submit=True):
+            # Check if FAQ was selected
+            default_value = ""
+            if st.session_state.selected_faq:
+                default_value = st.session_state.selected_faq
+                st.session_state.selected_faq = None  # Reset after using
+            
             user_question = st.text_input(
                 "Ask a question about your data:",
+                value=default_value,
                 placeholder="e.g., What are our top selling products this year?",
                 key="user_input_form"
             )
@@ -654,8 +720,14 @@ def main():
                 
                 try:
                     with st.spinner("Analyzing your data..."):
+                        # Track query timing
+                        start_time = time.time()
+                        
                         # Get answer from analytics engine
                         result = st.session_state.analytics_engine.answer_question(user_question)
+                        
+                        # Calculate response time
+                        response_time = time.time() - start_time
                         
                         # Display result
                         st.markdown("### Analysis Result")
@@ -687,18 +759,36 @@ def main():
                                     # Create formatted version for display
                                     df_display = format_numbers_in_dataframe(df_result)
                                     
-                                    st.dataframe(df_display, use_container_width=True)
-                                    
-                                    # Create and show chart based on intelligent detection
+                                    # Check if chart should be created
+                                    chart_applicable = should_create_chart(df_result, user_question, result.get('sql'))
                                     chart_base64 = None
-                                    if should_create_chart(df_result, user_question, result.get('sql')):
+                                    
+                                    # Generate chart if applicable (for both display and Excel export)
+                                    if chart_applicable:
                                         try:
                                             chart_base64 = create_chart_and_save(df_display, user_question)
-                                            if chart_base64:
-                                                st.markdown("### Visualization")
-                                                st.image(f"data:image/png;base64,{chart_base64}")
                                         except Exception as e:
                                             st.warning(f"Could not create chart: {e}")
+                                            chart_applicable = False
+                                    
+                                    # Create tabs for Data and Chart (Data first)
+                                    if chart_applicable and chart_base64:
+                                        tab1, tab2 = st.tabs(["📋 Data", "📊 Chart"])
+                                        
+                                        with tab1:
+                                            st.dataframe(df_display, use_container_width=True)
+                                        
+                                        with tab2:
+                                            st.image(f"data:image/png;base64,{chart_base64}")
+                                    else:
+                                        # If no chart, just show the data without tabs
+                                        tab1, tab2 = st.tabs(["📋 Data", "📊 Chart"])
+                                        
+                                        with tab1:
+                                            st.dataframe(df_display, use_container_width=True)
+                                        
+                                        with tab2:
+                                            st.info("No visualization available for this query")
                                     
                                     # Show SQL query used (moved to bottom)
                                     with st.expander("SQL Query Used"):
@@ -714,6 +804,20 @@ def main():
                                     }
                                     st.session_state.chat_history.append(chat_entry)
                                     
+                                    # Add to query log for analytics
+                                    log_entry = {
+                                        'timestamp': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                        'question': user_question,
+                                        'status': 'success',
+                                        'sql_query': result.get('sql', ''),
+                                        'results': result['data'],
+                                        'columns': result.get('columns', []),
+                                        'source_columns': extract_source_columns(result.get('sql', '')),
+                                        'response_time_seconds': round(response_time, 2),
+                                        'error': None
+                                    }
+                                    st.session_state.query_log.append(log_entry)
+                                    
                                     # Individual export removed - use bulk export instead
                                     
                                 else:
@@ -727,6 +831,20 @@ def main():
                                         'formatted_df': None
                                     }
                                     st.session_state.chat_history.append(chat_entry)
+                                    
+                                    # Add to query log
+                                    log_entry = {
+                                        'timestamp': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                        'question': user_question,
+                                        'status': 'success',
+                                        'sql_query': result.get('sql', ''),
+                                        'results': result['data'],
+                                        'columns': [],
+                                        'source_columns': extract_source_columns(result.get('sql', '')),
+                                        'response_time_seconds': round(response_time, 2),
+                                        'error': None
+                                    }
+                                    st.session_state.query_log.append(log_entry)
                             else:
                                 st.info("Query executed successfully but returned no data.")
                                 # Add to chat history for no-data results
@@ -738,6 +856,20 @@ def main():
                                     'formatted_df': None
                                 }
                                 st.session_state.chat_history.append(chat_entry)
+                                
+                                # Add to query log
+                                log_entry = {
+                                    'timestamp': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                    'question': user_question,
+                                    'status': 'success',
+                                    'sql_query': result.get('sql', ''),
+                                    'results': [],
+                                    'columns': [],
+                                    'source_columns': extract_source_columns(result.get('sql', '')),
+                                    'response_time_seconds': round(response_time, 2),
+                                    'error': None
+                                }
+                                st.session_state.query_log.append(log_entry)
                         else:
                             # Log error and show user-friendly message
                             error_entry = {
@@ -747,6 +879,20 @@ def main():
                                 'sql_attempted': result.get('sql', 'No SQL generated')
                             }
                             st.session_state.error_log.append(error_entry)
+                            
+                            # Add to query log as failure
+                            log_entry = {
+                                'timestamp': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                'question': user_question,
+                                'status': 'failure',
+                                'sql_query': result.get('sql', 'No SQL generated'),
+                                'results': [],
+                                'columns': [],
+                                'source_columns': extract_source_columns(result.get('sql', '')),
+                                'response_time_seconds': round(response_time, 2),
+                                'error': result['error']
+                            }
+                            st.session_state.query_log.append(log_entry)
                             
                             # User-friendly error message
                             st.error("I couldn't process that question properly.")
@@ -790,30 +936,21 @@ def main():
             st.markdown("---")
             
             # Header with export options
-            col1, col2, col3 = st.columns([2, 1, 1])
+            col1, col2 = st.columns([3, 1])
             
             with col1:
-                st.subheader("📝 Query History")
+                st.subheader("📝 Questions Asked in this Session")
             
             with col2:
-                if st.button("📥 Export All Results"):
-                    all_results_buffer = export_all_results_to_excel(st.session_state.chat_history)
-                    st.download_button(
-                        label="💾 Download All Results",
-                        data=all_results_buffer,
-                        file_name=f"all_query_results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-            
-            with col3:
-                if st.session_state.error_log and st.button("🐛 Download Error Log"):
-                    error_log_buffer = export_error_log(st.session_state.error_log)
-                    st.download_button(
-                        label="📋 Get Error Report",
-                        data=error_log_buffer,
-                        file_name=f"error_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                        mime="text/plain"
-                    )
+                # Direct download without two-step process
+                all_results_buffer = export_all_results_to_excel(st.session_state.chat_history)
+                st.download_button(
+                    label="📥 Export All Results",
+                    data=all_results_buffer,
+                    file_name=f"all_query_results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="export_all_btn"
+                )
             
             # Show recent queries with cached results
             for i, chat in enumerate(reversed(st.session_state.chat_history[-10:])):
@@ -854,6 +991,68 @@ def main():
                         st.write("❌ Query failed")
                         if chat['result'].get('error'):
                             st.code(chat['result']['error'], language='text')
+            
+            # Query Analytics Log Section
+            if st.session_state.query_log:
+                st.markdown("---")
+                st.subheader("📊 Query Analytics Log")
+                
+                # Export options for query log
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    st.markdown(f"**Total Queries:** {len(st.session_state.query_log)} | "
+                              f"**Success Rate:** {sum(1 for q in st.session_state.query_log if q['status'] == 'success') / len(st.session_state.query_log) * 100:.1f}%")
+                
+                with col2:
+                    # Export query log as JSON
+                    log_json = json.dumps(st.session_state.query_log, indent=2)
+                    st.download_button(
+                        label="💾 Export Log (JSON)",
+                        data=log_json,
+                        file_name=f"query_log_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json",
+                        key="export_log_btn"
+                    )
+                
+                # Display all log entries from this session
+                st.markdown(f"**All Query Analytics (This Session - {len(st.session_state.query_log)} queries):**")
+                
+                # Show all logs, reversed to show newest first
+                all_logs = st.session_state.query_log[::-1]  # All logs, reversed
+                
+                for i, log in enumerate(all_logs):
+                    status_icon = "✅" if log['status'] == 'success' else "❌"
+                    with st.expander(f"{status_icon} {log['question'][:60]}... ({log['response_time_seconds']}s)"):
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.write(f"**Timestamp:** {log['timestamp']}")
+                            st.write(f"**Status:** {log['status']}")
+                            st.write(f"**Response Time:** {log['response_time_seconds']} seconds")
+                        
+                        with col2:
+                            if log['results']:
+                                st.write(f"**Rows Returned:** {len(log['results'])}")
+                            else:
+                                st.write("**Rows Returned:** 0")
+                        
+                        if log['sql_query']:
+                            st.markdown("**SQL Query:**")
+                            st.code(log['sql_query'], language='sql')
+                        
+                        if log['error']:
+                            st.markdown("**Error:**")
+                            st.error(log['error'])
+                        
+                        # Show first few rows of results if available
+                        if log['results'] and len(log['results']) > 0:
+                            st.markdown("**Sample Results (First 5 rows):**")
+                            sample_df = pd.DataFrame(
+                                log['results'][:5],
+                                columns=log['columns'] if log['columns'] else None
+                            )
+                            st.dataframe(sample_df, use_container_width=True)
     
     else:
         # Instructions when not connected

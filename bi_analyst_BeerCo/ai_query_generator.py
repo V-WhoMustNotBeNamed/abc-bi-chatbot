@@ -32,7 +32,7 @@ class AIQueryGenerator:
                     }
                 ],
                 temperature=0.1,  # Low temperature for consistent SQL generation
-                max_tokens=500
+                max_tokens=1000
             )
             
             # Extract SQL from response
@@ -61,14 +61,31 @@ class AIQueryGenerator:
             prompt = f"""
 Explain the following SQL query in simple, non-technical language. 
 Focus on what the query is doing to answer the user's question.
-Be concise and clear, avoiding technical SQL terminology where possible.
+
+CRITICAL REQUIREMENTS - Your explanation MUST include ALL of the following:
+
+1. **Date Column Specification**: If ANY date filtering or grouping is used, you MUST explicitly state which date column is being used (e.g., "using the date_received column" or "filtering by the sale_date column")
+
+2. **Source Column Names**: Always mention the actual column names from the database, NOT aliases. For example:
+   - Say "counting rows in the cultivar column" NOT "counting total_sold"
+   - Say "summing the total_amount column" NOT "calculating revenue"
+   - Say "grouping by the product_name column" NOT "grouping by product"
+
+3. **Calculation Details**: For every aggregation (COUNT, SUM, AVG, etc.), specify:
+   - The exact operation (counting, summing, averaging)
+   - The exact column being operated on
+   - What each calculation represents
+
+4. **Multiple Date Columns**: If the database has multiple date columns and one was chosen, briefly explain which one (e.g., "using date_received rather than date_shipped")
+
+5. **Be Explicit**: Never use vague terms like "the date field" or "a column" - always name the specific column
 
 User's Question: {question}
 
 SQL Query:
 {sql_query}
 
-Provide a brief explanation (2-3 sentences) of how this query answers the question:
+Provide a clear, detailed explanation that explicitly names every column used:
 """
             
             # Call OpenAI API for explanation
@@ -85,7 +102,7 @@ Provide a brief explanation (2-3 sentences) of how this query answers the questi
                     }
                 ],
                 temperature=0.3,
-                max_tokens=200
+                max_tokens=400
             )
             
             explanation = response.choices[0].message.content.strip()
@@ -122,16 +139,43 @@ IMPORTANT GUIDELINES:
 16. Use meaningful table aliases: s for sales, c for customers, p for products
 17. Return only the SQL query, no explanations unless there's an error
 
+CRITICAL BUSINESS LOGIC RULES:
+18. **VOLUME means QUANTITY, not PRICE**: 
+    - When user asks about "volume" or "sales volume", use quantity/qty/units columns
+    - "Sales volume" = COUNT or SUM of quantity fields
+    - "Sales value" or "revenue" = SUM of price/amount fields
+    - Examples:
+      * "What is the sales volume?" → Use COUNT(*) or SUM(quantity)
+      * "What is the sales value?" → Use SUM(total_amount) or SUM(price)
+      * "Top products by volume" → ORDER BY quantity or COUNT
+      * "Top products by value" → ORDER BY amount or revenue
+19. Always prioritize quantity fields for volume-related queries
+20. Only use price/amount fields when explicitly asked about revenue, value, or money
+
 COLUMN NAME MAPPING EXAMPLES:
 - If user asks about "Sales Contact", use column: sales_contact
 - If user asks about "Total Amount", use column: total_amount
 - If user asks about "Product Name", use column: product_name
 
-EXAMPLE OF PROPER DATE FORMATTING AND ORDERING:
+CRITICAL GROUP BY RULE:
+21. **GROUP BY expressions MUST match SELECT expressions exactly**:
+    - If SELECT has strftime('%B %Y', date), GROUP BY must also have strftime('%B %Y', date)
+    - NEVER mix different date formats between SELECT and GROUP BY
+    - Alternative: Use MIN/MAX wrapper in SELECT if GROUP BY uses different format
+
+CORRECT DATE FORMATTING EXAMPLES:
+Example 1 - Matching expressions:
 SELECT strftime('%B %Y', sale_date) as month_year, SUM(total_amount) as revenue
 FROM salestransactions
 WHERE sale_date BETWEEN '2023-03-01' AND '2023-08-31'
-GROUP BY strftime('%Y-%m', sale_date), strftime('%B %Y', sale_date)
+GROUP BY strftime('%B %Y', sale_date)
+ORDER BY MIN(sale_date) ASC
+
+Example 2 - Using MIN wrapper:
+SELECT MIN(strftime('%B %Y', sale_date)) as month_year, SUM(total_amount) as revenue
+FROM salestransactions
+WHERE sale_date BETWEEN '2023-03-01' AND '2023-08-31'
+GROUP BY strftime('%Y-%m', sale_date)
 ORDER BY strftime('%Y-%m', sale_date) ASC
 
 USER QUESTION: {question}
