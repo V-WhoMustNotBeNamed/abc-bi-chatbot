@@ -334,11 +334,12 @@ def export_to_excel(df, question, sql_query=None, chart_base64=None):
     return buffer
 
 def export_all_results_to_excel(chat_history):
-    """Export all query results to a multi-sheet Excel file"""
+    """Export all query results to a multi-sheet Excel file with charts"""
     buffer = io.BytesIO()
     
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         from openpyxl.styles import Font
+        from openpyxl.drawing.image import Image as OpenpyxlImage
         
         summary_data = []
         sheet_counter = 1
@@ -407,6 +408,18 @@ def export_all_results_to_excel(chat_history):
 
                     # Also auto-fit the question title width
                     worksheet.column_dimensions['A'].width = max(len(f"Query {sheet_counter}: {chat['question']}") + 2, worksheet.column_dimensions['A'].width)
+                    
+                    # Add chart if available
+                    if chat.get('chart_base64'):
+                        try:
+                            chart_data = base64.b64decode(chat['chart_base64'])
+                            chart_buffer = io.BytesIO(chart_data)
+                            img = OpenpyxlImage(chart_buffer)
+                            img.width = 600
+                            img.height = 400
+                            worksheet.add_image(img, f'A{len(df_raw) + 5}')
+                        except Exception as e:
+                            print(f"Could not embed chart in Excel for query {sheet_counter}: {e}")
                     
                     sheet_counter += 1
         
@@ -650,9 +663,13 @@ def main():
                         st.markdown("---")
                         
                         if result['success']:
-                            # Show SQL query used
-                            with st.expander("SQL Query Used"):
-                                st.code(result['sql'], language='sql')
+                            # Show Answer Methodology (explanation of how the query works)
+                            if st.session_state.analytics_engine.ai_generator:
+                                with st.expander("Answer Methodology"):
+                                    explanation = st.session_state.analytics_engine.ai_generator.explain_sql_query(
+                                        result['sql'], user_question
+                                    )
+                                    st.write(explanation)
                             
                             # Show results
                             if result['data']:
@@ -683,6 +700,10 @@ def main():
                                         except Exception as e:
                                             st.warning(f"Could not create chart: {e}")
                                     
+                                    # Show SQL query used (moved to bottom)
+                                    with st.expander("SQL Query Used"):
+                                        st.code(result['sql'], language='sql')
+                                    
                                     # Add to chat history with full result data including chart
                                     chat_entry = {
                                         'question': user_question,
@@ -693,15 +714,7 @@ def main():
                                     }
                                     st.session_state.chat_history.append(chat_entry)
                                     
-                                    # Add export button for this result
-                                    if st.button("Export to Excel", key=f"export_{len(st.session_state.chat_history)}"):
-                                        excel_buffer = export_to_excel(df_result, user_question, result['sql'], chart_base64)
-                                        st.download_button(
-                                            label="Download Excel File",
-                                            data=excel_buffer,
-                                            file_name=f"query_result_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                                        )
+                                    # Individual export removed - use bulk export instead
                                     
                                 else:
                                     st.write(result['data'])
@@ -832,20 +845,7 @@ def main():
                             st.markdown("**Chart:**")
                             st.image(f"data:image/png;base64,{chat['chart_base64']}")
                         
-                        # Individual export for this query
-                        if isinstance(chat['result']['data'][0], (list, tuple)):
-                            df_export = pd.DataFrame(
-                                chat['result']['data'], 
-                                columns=chat['result'].get('columns', [f'Col_{j}' for j in range(len(chat['result']['data'][0]))])
-                            )
-                            excel_buffer = export_to_excel(df_export, chat['question'], chat['result']['sql'], chat.get('chart_base64'))
-                            st.download_button(
-                                label="📥 Export This Result",
-                                data=excel_buffer,
-                                file_name=f"query_{i}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key=f"export_history_{i}"
-                            )
+                        # Individual export removed - use bulk export instead
                         
                         # Show SQL used
                         with st.expander("🔍 SQL Query"):

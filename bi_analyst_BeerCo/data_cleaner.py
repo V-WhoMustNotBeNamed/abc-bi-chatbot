@@ -222,8 +222,8 @@ class DataCleaner:
     def _convert_to_datetime(self, series: pd.Series) -> Tuple[pd.Series, bool]:
         """Convert series to datetime"""
         try:
-            # Try to parse dates
-            date_series = pd.to_datetime(series, errors='coerce')
+            # Try to parse dates with format='mixed' to avoid warnings
+            date_series = pd.to_datetime(series, errors='coerce', format='mixed')
             
             # Check if conversion was successful for most values
             non_null_count = series.notna().sum()
@@ -276,7 +276,7 @@ class DataCleaner:
         
         # Check if values can be converted to different types
         numeric_count = pd.to_numeric(sample, errors='coerce').notna().sum()
-        date_count = pd.to_datetime(sample, errors='coerce').notna().sum()
+        date_count = pd.to_datetime(sample, errors='coerce', format='mixed').notna().sum()
         
         # If some values are numeric and some are not, it's mixed
         if 0 < numeric_count < len(sample):

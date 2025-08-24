@@ -54,6 +54,47 @@ class AIQueryGenerator:
                 'error': str(e)
             }
     
+    def explain_sql_query(self, sql_query: str, question: str) -> str:
+        """Generate a natural language explanation of what the SQL query does"""
+        try:
+            # Create prompt for SQL explanation
+            prompt = f"""
+Explain the following SQL query in simple, non-technical language. 
+Focus on what the query is doing to answer the user's question.
+Be concise and clear, avoiding technical SQL terminology where possible.
+
+User's Question: {question}
+
+SQL Query:
+{sql_query}
+
+Provide a brief explanation (2-3 sentences) of how this query answers the question:
+"""
+            
+            # Call OpenAI API for explanation
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "You are a helpful assistant that explains SQL queries in simple, business-friendly language."
+                    },
+                    {
+                        "role": "user", 
+                        "content": prompt
+                    }
+                ],
+                temperature=0.3,
+                max_tokens=200
+            )
+            
+            explanation = response.choices[0].message.content.strip()
+            return explanation
+            
+        except Exception as e:
+            # Fallback to a simple explanation if API fails
+            return "This query analyzes your data to answer the question by filtering, grouping, and calculating the relevant information from your database tables."
+    
     def _create_sql_prompt(self, question: str, schema_info: str) -> str:
         """Create a detailed prompt for SQL generation"""
         prompt = f"""
