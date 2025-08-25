@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 import time
 import json
 import sqlparse
+from auth import check_authentication, display_user_info, has_permission, logout_user, require_permission
 
 # Load environment variables from .env file
 load_dotenv()
@@ -525,6 +526,9 @@ def main():
     st.title("🍺 AI BI Analyst for Google Sheets")
     st.markdown("Ask questions about your business data in natural language!")
     
+    # Display user information in sidebar
+    display_user_info()
+    
     # Sidebar for configuration
     with st.sidebar:
         st.header("Configuration")
@@ -941,15 +945,19 @@ def main():
                 st.subheader("📝 Questions Asked in this Session")
             
             with col2:
-                # Direct download without two-step process
-                all_results_buffer = export_all_results_to_excel(st.session_state.chat_history)
-                st.download_button(
-                    label="📥 Export All Results",
-                    data=all_results_buffer,
-                    file_name=f"all_query_results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="export_all_btn"
-                )
+                # Check if user has export permission
+                if has_permission("export"):
+                    # Direct download without two-step process
+                    all_results_buffer = export_all_results_to_excel(st.session_state.chat_history)
+                    st.download_button(
+                        label="📥 Export All Results",
+                        data=all_results_buffer,
+                        file_name=f"all_query_results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="export_all_btn"
+                    )
+                else:
+                    st.info("🔒 Export feature requires admin permissions")
             
             # Show recent queries with cached results
             for i, chat in enumerate(reversed(st.session_state.chat_history[-10:])):
@@ -1004,15 +1012,16 @@ def main():
                               f"**Success Rate:** {sum(1 for q in st.session_state.query_log if q['status'] == 'success') / len(st.session_state.query_log) * 100:.1f}%")
                 
                 with col2:
-                    # Export query log as JSON
-                    log_json = json.dumps(st.session_state.query_log, indent=2)
-                    st.download_button(
-                        label="💾 Export Log (JSON)",
-                        data=log_json,
-                        file_name=f"query_log_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.json",
-                        mime="application/json",
-                        key="export_log_btn"
-                    )
+                    # Export query log as JSON (check permissions)
+                    if has_permission("export"):
+                        log_json = json.dumps(st.session_state.query_log, indent=2)
+                        st.download_button(
+                            label="💾 Export Log (JSON)",
+                            data=log_json,
+                            file_name=f"query_log_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.json",
+                            mime="application/json",
+                            key="export_log_btn"
+                        )
                 
                 # Display all log entries from this session
                 st.markdown(f"**All Query Analytics (This Session - {len(st.session_state.query_log)} queries):**")
@@ -1070,4 +1079,7 @@ def main():
         """)
 
 if __name__ == "__main__":
-    main()
+    # Check authentication before running main app
+    if check_authentication():
+        main()
+    # If not authenticated, check_authentication() will display login page
